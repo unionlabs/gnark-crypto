@@ -50,6 +50,8 @@ const (
 // SizeOfGT represents the size in bytes that a GT element need in binary form
 const SizeOfGT = fptower.SizeOfGT
 
+var ErrInvalidInfinityEncoding = errors.New("invalid infinity point encoding")
+
 // Encoder writes bls24-315 object values to an output stream
 type Encoder struct {
 	w   io.Writer
@@ -86,9 +88,16 @@ func (dec *Decoder) Decode(v interface{}) (err error) {
 
 	// implementation note: code is a bit verbose (abusing code generation), but minimize allocations on the heap
 	// in particular, careful attention must be given to usage of Bytes() method on Elements and Points
-	// that return an array (not a slice) of bytes. Using this is beneficial to minimize memallocs
+	// that return an array (not a slice) of bytes. Using this is beneficial to minimize memory allocations
 	// in very large (de)serialization upstream in gnark.
-	// (but detrimental to code lisibility here)
+	// (but detrimental to code readability here)
+
+	var read64 int64
+	if vf, ok := v.(io.ReaderFrom); ok {
+		read64, err = vf.ReadFrom(dec.r)
+		dec.n += read64
+		return
+	}
 
 	var buf [SizeOfG2AffineUncompressed]byte
 	var read int
@@ -111,46 +120,12 @@ func (dec *Decoder) Decode(v interface{}) (err error) {
 		err = t.SetBytesCanonical(buf[:fp.Bytes])
 		return
 	case *[]fr.Element:
-		var sliceLen uint32
-		sliceLen, err = dec.readUint32()
-		if err != nil {
-			return
-		}
-		if len(*t) != int(sliceLen) {
-			*t = make([]fr.Element, sliceLen)
-		}
-
-		for i := 0; i < len(*t); i++ {
-			read, err = io.ReadFull(dec.r, buf[:fr.Bytes])
-			dec.n += int64(read)
-			if err != nil {
-				return
-			}
-			if err = (*t)[i].SetBytesCanonical(buf[:fr.Bytes]); err != nil {
-				return
-			}
-		}
+		read64, err = (*fr.Vector)(t).ReadFrom(dec.r)
+		dec.n += read64
 		return
 	case *[]fp.Element:
-		var sliceLen uint32
-		sliceLen, err = dec.readUint32()
-		if err != nil {
-			return
-		}
-		if len(*t) != int(sliceLen) {
-			*t = make([]fp.Element, sliceLen)
-		}
-
-		for i := 0; i < len(*t); i++ {
-			read, err = io.ReadFull(dec.r, buf[:fp.Bytes])
-			dec.n += int64(read)
-			if err != nil {
-				return
-			}
-			if err = (*t)[i].SetBytesCanonical(buf[:fp.Bytes]); err != nil {
-				return
-			}
-		}
+		read64, err = (*fp.Vector)(t).ReadFrom(dec.r)
+		dec.n += read64
 		return
 	case *G1Affine:
 		// we start by reading compressed point size, if metadata tells us it is uncompressed, we read more.
@@ -392,6 +367,19 @@ func NoSubgroupChecks() func(*Decoder) {
 	}
 }
 
+// isZeroed checks that the provided bytes are at 0
+func isZeroed(firstByte byte, buf []byte) bool {
+	if firstByte != 0 {
+		return false
+	}
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (enc *Encoder) encode(v interface{}) (err error) {
 	rv := reflect.ValueOf(v)
 	if v == nil || (rv.Kind() == reflect.Ptr && rv.IsNil()) {
@@ -400,7 +388,15 @@ func (enc *Encoder) encode(v interface{}) (err error) {
 
 	// implementation note: code is a bit verbose (abusing code generation), but minimize allocations on the heap
 
+	var written64 int64
+	if vw, ok := v.(io.WriterTo); ok {
+		written64, err = vw.WriteTo(enc.w)
+		enc.n += written64
+		return
+	}
+
 	var written int
+
 	switch t := v.(type) {
 	case *fr.Element:
 		buf := t.Bytes()
@@ -422,41 +418,22 @@ func (enc *Encoder) encode(v interface{}) (err error) {
 		written, err = enc.w.Write(buf[:])
 		enc.n += int64(written)
 		return
+	case fr.Vector:
+		written64, err = t.WriteTo(enc.w)
+		enc.n += written64
+		return
+	case fp.Vector:
+		written64, err = t.WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []fr.Element:
-		// write slice length
-		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
-		if err != nil {
-			return
-		}
-		enc.n += 4
-		var buf [fr.Bytes]byte
-		for i := 0; i < len(t); i++ {
-			buf = t[i].Bytes()
-			written, err = enc.w.Write(buf[:])
-			enc.n += int64(written)
-			if err != nil {
-				return
-			}
-		}
-		return nil
+		written64, err = (*fr.Vector)(&t).WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []fp.Element:
-		// write slice length
-		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
-		if err != nil {
-			return
-		}
-		enc.n += 4
-		var buf [fp.Bytes]byte
-		for i := 0; i < len(t); i++ {
-			buf = t[i].Bytes()
-			written, err = enc.w.Write(buf[:])
-			enc.n += int64(written)
-			if err != nil {
-				return
-			}
-		}
-		return nil
-
+		written64, err = (*fp.Vector)(&t).WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []G1Affine:
 		// write slice length
 		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
@@ -514,7 +491,15 @@ func (enc *Encoder) encodeRaw(v interface{}) (err error) {
 
 	// implementation note: code is a bit verbose (abusing code generation), but minimize allocations on the heap
 
+	var written64 int64
+	if vw, ok := v.(io.WriterTo); ok {
+		written64, err = vw.WriteTo(enc.w)
+		enc.n += written64
+		return
+	}
+
 	var written int
+
 	switch t := v.(type) {
 	case *fr.Element:
 		buf := t.Bytes()
@@ -536,41 +521,22 @@ func (enc *Encoder) encodeRaw(v interface{}) (err error) {
 		written, err = enc.w.Write(buf[:])
 		enc.n += int64(written)
 		return
+	case fr.Vector:
+		written64, err = t.WriteTo(enc.w)
+		enc.n += written64
+		return
+	case fp.Vector:
+		written64, err = t.WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []fr.Element:
-		// write slice length
-		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
-		if err != nil {
-			return
-		}
-		enc.n += 4
-		var buf [fr.Bytes]byte
-		for i := 0; i < len(t); i++ {
-			buf = t[i].Bytes()
-			written, err = enc.w.Write(buf[:])
-			enc.n += int64(written)
-			if err != nil {
-				return
-			}
-		}
-		return nil
+		written64, err = (*fr.Vector)(&t).WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []fp.Element:
-		// write slice length
-		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
-		if err != nil {
-			return
-		}
-		enc.n += 4
-		var buf [fp.Bytes]byte
-		for i := 0; i < len(t); i++ {
-			buf = t[i].Bytes()
-			written, err = enc.w.Write(buf[:])
-			enc.n += int64(written)
-			if err != nil {
-				return
-			}
-		}
-		return nil
-
+		written64, err = (*fp.Vector)(&t).WriteTo(enc.w)
+		enc.n += written64
+		return
 	case []G1Affine:
 		// write slice length
 		err = binary.Write(enc.w, binary.BigEndian, uint32(len(t)))
@@ -723,13 +689,19 @@ func (p *G1Affine) setBytes(buf []byte, subGroupCheck bool) (int, error) {
 		}
 	}
 
-	// if infinity is encoded in the metadata, we don't need to read the buffer
+	// infinity encoded, we still check that the buffer is full of zeroes.
 	if mData == mCompressedInfinity {
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG1AffineCompressed]) {
+			return 0, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
 		return SizeOfG1AffineCompressed, nil
 	}
 	if mData == mUncompressedInfinity {
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG1AffineUncompressed]) {
+			return 0, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
 		return SizeOfG1AffineUncompressed, nil
@@ -845,9 +817,12 @@ func (p *G1Affine) unsafeSetCompressedBytes(buf []byte) (isInfinity bool, err er
 	mData := buf[0] & mMask
 
 	if mData == mCompressedInfinity {
+		isInfinity = true
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG1AffineCompressed]) {
+			return isInfinity, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
-		isInfinity = true
 		return isInfinity, nil
 	}
 
@@ -982,13 +957,19 @@ func (p *G2Affine) setBytes(buf []byte, subGroupCheck bool) (int, error) {
 		}
 	}
 
-	// if infinity is encoded in the metadata, we don't need to read the buffer
+	// infinity encoded, we still check that the buffer is full of zeroes.
 	if mData == mCompressedInfinity {
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG2AffineCompressed]) {
+			return 0, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
 		return SizeOfG2AffineCompressed, nil
 	}
 	if mData == mUncompressedInfinity {
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG2AffineUncompressed]) {
+			return 0, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
 		return SizeOfG2AffineUncompressed, nil
@@ -1136,9 +1117,12 @@ func (p *G2Affine) unsafeSetCompressedBytes(buf []byte) (isInfinity bool, err er
 	mData := buf[0] & mMask
 
 	if mData == mCompressedInfinity {
+		isInfinity = true
+		if !isZeroed(buf[0] & ^mMask, buf[1:SizeOfG2AffineCompressed]) {
+			return isInfinity, ErrInvalidInfinityEncoding
+		}
 		p.X.SetZero()
 		p.Y.SetZero()
-		isInfinity = true
 		return isInfinity, nil
 	}
 

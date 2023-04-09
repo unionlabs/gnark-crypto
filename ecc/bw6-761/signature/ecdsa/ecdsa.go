@@ -196,6 +196,7 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 			kInv.ModInverse(k, order)
 
 			P.X.BigInt(r)
+
 			r.Mod(r, order)
 			if r.Sign() != 0 {
 				break

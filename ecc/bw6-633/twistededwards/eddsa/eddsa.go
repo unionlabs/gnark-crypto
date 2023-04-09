@@ -30,6 +30,7 @@ import (
 )
 
 var errNotOnCurve = errors.New("point not on curve")
+var errHashNeeded = errors.New("hFunc cannot be nil. We need a hash for Fiat-Shamir")
 
 const (
 	sizeFr         = fr.Bytes
@@ -123,9 +124,16 @@ func (privKey *PrivateKey) Public() signature.PublicKey {
 	return &pub
 }
 
-// Sign sign a message
+// Sign sign a sequence of field elements
+// For arbitrary strings use fr.Hash first
 // Pure Eddsa version (see https://tools.ietf.org/html/rfc8032#page-8)
 func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error) {
+
+	// hFunc cannot be nil.
+	// We need a hash function for the Fiat-Shamir.
+	if hFunc == nil {
+		return nil, errHashNeeded
+	}
 
 	curveParams := twistededwards.GetEdwardsCurve()
 
@@ -151,31 +159,23 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 		return nil, errNotOnCurve
 	}
 
-	var hramInt big.Int
-	if hFunc != nil {
-		// compute H(R, A, M), all parameters in data are in Montgomery form
-		resRX := res.R.X.Bytes()
-		resRY := res.R.Y.Bytes()
-		resAX := privKey.PublicKey.A.X.Bytes()
-		resAY := privKey.PublicKey.A.Y.Bytes()
-		sizeDataToHash := 4*sizeFr + len(message)
-		dataToHash := make([]byte, sizeDataToHash)
-		copy(dataToHash[:], resRX[:])
-		copy(dataToHash[sizeFr:], resRY[:])
-		copy(dataToHash[2*sizeFr:], resAX[:])
-		copy(dataToHash[3*sizeFr:], resAY[:])
-		copy(dataToHash[4*sizeFr:], message)
-		hFunc.Reset()
-		_, err := hFunc.Write(dataToHash[:])
-		if err != nil {
+	// compute H(R, A, M), all parameters in data are in Montgomery form
+	hFunc.Reset()
+
+	resRX := res.R.X.Bytes()
+	resRY := res.R.Y.Bytes()
+	resAX := privKey.PublicKey.A.X.Bytes()
+	resAY := privKey.PublicKey.A.Y.Bytes()
+	toWrite := [][]byte{resRX[:], resRY[:], resAX[:], resAY[:], message}
+	for _, bytes := range toWrite {
+		if _, err := hFunc.Write(bytes); err != nil {
 			return nil, err
 		}
-
-		hramBin := hFunc.Sum(nil)
-		hramInt.SetBytes(hramBin)
-	} else {
-		hramInt.SetBytes(message)
 	}
+
+	var hramInt big.Int
+	hramBin := hFunc.Sum(nil)
+	hramInt.SetBytes(hramBin)
 
 	// Compute s = randScalarInt + H(R,A,M)*S
 	// going with big int to do ops mod curve order
@@ -197,6 +197,12 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 // Verify verifies an eddsa signature
 func (pub *PublicKey) Verify(sigBin, message []byte, hFunc hash.Hash) (bool, error) {
 
+	// hFunc cannot be nil.
+	// We need a hash function for the Fiat-Shamir.
+	if hFunc == nil {
+		return false, errHashNeeded
+	}
+
 	curveParams := twistededwards.GetEdwardsCurve()
 
 	// verify that pubKey and R are on the curve
@@ -210,30 +216,25 @@ func (pub *PublicKey) Verify(sigBin, message []byte, hFunc hash.Hash) (bool, err
 		return false, err
 	}
 
-	var hramInt big.Int
-	if hFunc != nil {
-		// compute H(R, A, M), all parameters in data are in Montgomery form
-		sigRX := sig.R.X.Bytes()
-		sigRY := sig.R.Y.Bytes()
-		sigAX := pub.A.X.Bytes()
-		sigAY := pub.A.Y.Bytes()
-		sizeDataToHash := 4*sizeFr + len(message)
-		dataToHash := make([]byte, sizeDataToHash)
-		copy(dataToHash[:], sigRX[:])
-		copy(dataToHash[sizeFr:], sigRY[:])
-		copy(dataToHash[2*sizeFr:], sigAX[:])
-		copy(dataToHash[3*sizeFr:], sigAY[:])
-		copy(dataToHash[4*sizeFr:], message)
-		hFunc.Reset()
-		if _, err := hFunc.Write(dataToHash[:]); err != nil {
+	// compute H(R, A, M), all parameters in data are in Montgomery form
+
+	hFunc.Reset()
+
+	sigRX := sig.R.X.Bytes()
+	sigRY := sig.R.Y.Bytes()
+	sigAX := pub.A.X.Bytes()
+	sigAY := pub.A.Y.Bytes()
+
+	toWrite := [][]byte{sigRX[:], sigRY[:], sigAX[:], sigAY[:], message}
+	for _, bytes := range toWrite {
+		if _, err := hFunc.Write(bytes); err != nil {
 			return false, err
 		}
-
-		hramBin := hFunc.Sum(nil)
-		hramInt.SetBytes(hramBin)
-	} else {
-		hramInt.SetBytes(message)
 	}
+
+	var hramInt big.Int
+	hramBin := hFunc.Sum(nil)
+	hramInt.SetBytes(hramBin)
 
 	// lhs = cofactor*S*Base
 	var lhs twistededwards.PointAffine

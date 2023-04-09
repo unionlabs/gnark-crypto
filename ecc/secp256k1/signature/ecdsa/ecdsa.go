@@ -168,27 +168,31 @@ func (privKey *PrivateKey) Public() signature.PublicKey {
 	return &pub
 }
 
-// Sign performs the ECDSA signature
+// SignForRecover performs the ECDSA signature and returns public key recovery information
 //
 // k ← 𝔽r (random)
 // P = k ⋅ g1Gen
 // r = x_P (mod order)
 // s = k⁻¹ . (m + sk ⋅ r)
-// signature = {r, s}
+// v = (div(x_P, order)<<1) || y_P[-1]
 //
 // SEC 1, Version 2.0, Section 4.1.3
-func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error) {
-	scalar, r, s, kInv := new(big.Int), new(big.Int), new(big.Int), new(big.Int)
+func (privKey *PrivateKey) SignForRecover(message []byte, hFunc hash.Hash) (v uint, r, s *big.Int, err error) {
+	halfp := new(big.Int).Sub(fp.Modulus(), big.NewInt(1))
+	halfp.Div(halfp, big.NewInt(2))
+	r, s = new(big.Int), new(big.Int)
+
+	scalar, kInv := new(big.Int), new(big.Int)
 	scalar.SetBytes(privKey.scalar[:sizeFr])
 	for {
 		for {
 			csprng, err := nonce(privKey, message)
 			if err != nil {
-				return nil, err
+				return 0, nil, nil, err
 			}
 			k, err := randFieldElement(csprng)
 			if err != nil {
-				return nil, err
+				return 0, nil, nil, err
 			}
 
 			var P secp256k1.G1Affine
@@ -196,6 +200,13 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 			kInv.ModInverse(k, order)
 
 			P.X.BigInt(r)
+			// set how many times we overflow the scalar field
+			v |= (uint(new(big.Int).Div(r, order).Uint64())) << 1
+			// set if y is small or big
+			if P.Y.BigInt(new(big.Int)).Cmp(halfp) >= 0 {
+				v |= 1
+			}
+
 			r.Mod(r, order)
 			if r.Sign() != 0 {
 				break
@@ -211,7 +222,7 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 			hFunc.Reset()
 			_, err := hFunc.Write(dataToHash[:])
 			if err != nil {
-				return nil, err
+				return 0, nil, nil, err
 			}
 			hramBin := hFunc.Sum(nil)
 			m = utils.HashToInt(hramBin)
@@ -227,6 +238,23 @@ func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error)
 		}
 	}
 
+	return v, r, s, nil
+}
+
+// Sign performs the ECDSA signature
+//
+// k ← 𝔽r (random)
+// P = k ⋅ g1Gen
+// r = x_P (mod order)
+// s = k⁻¹ . (m + sk ⋅ r)
+// signature = {r, s}
+//
+// SEC 1, Version 2.0, Section 4.1.3
+func (privKey *PrivateKey) Sign(message []byte, hFunc hash.Hash) ([]byte, error) {
+	_, r, s, err := privKey.SignForRecover(message, hFunc)
+	if err != nil {
+		return nil, err
+	}
 	var sig Signature
 	r.FillBytes(sig.R[:sizeFr])
 	s.FillBytes(sig.S[:sizeFr])

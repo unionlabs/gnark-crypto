@@ -19,10 +19,11 @@ package pedersen
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
+
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
-	"math/big"
 )
 
 // Key for proof and verification
@@ -110,4 +111,46 @@ func (k *Key) VerifyKnowledgeProof(commitment bn254.G1Affine, knowledgeProof bn2
 		return nil
 	}
 	return fmt.Errorf("proof rejected")
+}
+
+func (k *Key) WriteTo(e *bn254.Encoder) (n int64, err error) {
+	return k.writeTo(e)
+}
+
+func (k *Key) writeTo(e *bn254.Encoder) (int64, error) {
+	if err := e.Encode(&k.g); err != nil {
+		return e.BytesWritten(), err
+	}
+	if err := e.Encode(&k.gRootSigmaNeg); err != nil {
+		return e.BytesWritten(), err
+	}
+	fmt.Printf("Basis         : %d\n", len(k.basis))
+	if err := e.Encode(k.basis); err != nil {
+		return e.BytesWritten(), err
+	}
+	fmt.Printf("BasisExpSignam: %d\n", len(k.basisExpSigma))
+	if err := e.Encode(k.basisExpSigma); err != nil {
+		return e.BytesWritten(), err
+	}
+	return e.BytesWritten(), nil
+}
+
+func (k *Key) ReadFrom(d *bn254.Decoder) (int64, error) {
+	return k.readFrom(d)
+}
+
+func (k *Key) readFrom(d *bn254.Decoder) (int64, error) {
+	if err := d.Decode(&k.g); err != nil {
+		return d.BytesRead(), err
+	}
+	if err := d.Decode(&k.gRootSigmaNeg); err != nil {
+		return d.BytesRead(), err
+	}
+	if err := d.Decode(&k.basis); err != nil {
+		return d.BytesRead(), err
+	}
+	if err := d.Decode(&k.basisExpSigma); err != nil {
+		return d.BytesRead(), err
+	}
+	return d.BytesRead(), nil
 }

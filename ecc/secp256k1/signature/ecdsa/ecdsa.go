@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/subtle"
+	"errors"
 	"hash"
 	"io"
 	"math/big"
@@ -151,7 +152,6 @@ func RecoverP(v uint, r *big.Int) (*secp256k1.G1Affine, error) {
 	}, nil
 }
 
->>>>>>> origin/master:ecc/secp256k1/ecdsa/ecdsa.go
 type zr struct{}
 
 // Read replaces the contents of dst with zeros. It is safe for concurrent use.

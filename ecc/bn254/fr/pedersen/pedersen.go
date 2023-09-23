@@ -20,7 +20,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
-	"math/big"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	curve "github.com/consensys/gnark-crypto/ecc/bn254"

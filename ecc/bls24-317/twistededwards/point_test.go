@@ -1,4 +1,4 @@
-// Copyright 2020 ConsenSys Software Inc.
+// Copyright 2020 Consensys Software Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -735,7 +735,7 @@ func GenBigInt() gopter.Gen {
 	return func(genParams *gopter.GenParameters) *gopter.GenResult {
 		var s big.Int
 		var b [fr.Bytes]byte
-		_, err := rand.Read(b[:])
+		_, err := rand.Read(b[:]) //#nosec G404 weak rng is fine here
 		if err != nil {
 			panic(err)
 		}
@@ -778,4 +778,146 @@ func BenchmarkScalarMulProjective(b *testing.B) {
 	for j := 0; j < b.N; j++ {
 		doubleAndAdd.ScalarMultiplication(&a, &s)
 	}
+}
+
+func BenchmarkNeg(b *testing.B) {
+	params := GetEdwardsCurve()
+	var s big.Int
+	s.SetString("52435875175126190479447705081859658376581184513", 10)
+
+	b.Run("Affine", func(b *testing.B) {
+		var point PointAffine
+		point.ScalarMultiplication(&params.Base, &s)
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			point.Neg(&point)
+		}
+	})
+	b.Run("Projective", func(b *testing.B) {
+		var baseProj PointProj
+		baseProj.FromAffine(&params.Base)
+		var point PointProj
+		point.ScalarMultiplication(&baseProj, &s)
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			point.Neg(&point)
+		}
+	})
+	b.Run("Extended", func(b *testing.B) {
+		var baseProj PointExtended
+		baseProj.FromAffine(&params.Base)
+		var point PointExtended
+		point.ScalarMultiplication(&baseProj, &s)
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			point.Neg(&point)
+		}
+	})
+}
+
+func BenchmarkMixedAdd(b *testing.B) {
+	params := GetEdwardsCurve()
+	var s big.Int
+	s.SetString("52435875175126190479447705081859658376581184513", 10)
+	var point PointAffine
+	point.ScalarMultiplication(&params.Base, &s)
+
+	b.Run("Projective", func(b *testing.B) {
+		var accum PointProj
+		accum.setInfinity()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			accum.MixedAdd(&accum, &point)
+		}
+	})
+	b.Run("Extended", func(b *testing.B) {
+		var accum PointExtended
+		accum.setInfinity()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			accum.MixedAdd(&accum, &point)
+		}
+	})
+}
+
+func BenchmarkAdd(b *testing.B) {
+	params := GetEdwardsCurve()
+	var s big.Int
+	s.SetString("52435875175126190479447705081859658376581184513", 10)
+
+	b.Run("Affine", func(b *testing.B) {
+		var point PointAffine
+		point.ScalarMultiplication(&params.Base, &s)
+		var accum PointAffine
+		accum.setInfinity()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			accum.Add(&accum, &point)
+		}
+	})
+	b.Run("Projective", func(b *testing.B) {
+		var pointAff PointAffine
+		pointAff.ScalarMultiplication(&params.Base, &s)
+		var accum, point PointProj
+		point.FromAffine(&pointAff)
+		accum.setInfinity()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			accum.Add(&accum, &point)
+		}
+	})
+	b.Run("Extended", func(b *testing.B) {
+		var pointAff PointAffine
+		pointAff.ScalarMultiplication(&params.Base, &s)
+		var accum, point PointExtended
+		point.FromAffine(&pointAff)
+		accum.setInfinity()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			accum.Add(&accum, &point)
+		}
+	})
+}
+
+func BenchmarkIsOnCurve(b *testing.B) {
+	params := GetEdwardsCurve()
+	var s big.Int
+	s.SetString("52435875175126190479447705081859658376581184513", 10)
+
+	b.Run("positive", func(b *testing.B) {
+		var point PointAffine
+		point.ScalarMultiplication(&params.Base, &s)
+
+		if !point.IsOnCurve() {
+			b.Fatal("point should must be on curve")
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = point.IsOnCurve()
+		}
+	})
+
+	b.Run("negative", func(b *testing.B) {
+		var point PointAffine
+		point.ScalarMultiplication(&params.Base, &s)
+		point.X.Add(&point.X, &point.X)
+
+		if point.IsOnCurve() {
+			b.Fatal("point should not be on curve")
+		}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = point.IsOnCurve()
+		}
+	})
 }

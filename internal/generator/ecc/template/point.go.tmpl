@@ -108,6 +108,16 @@ func (p *{{ $TAffine }}) Add(a, b *{{ $TAffine }}) *{{ $TAffine }} {
 	return p
 }
 
+// Double doubles a point in affine coordinates.
+// This should rarely be used as it is very inefficient compared to Jacobian
+func (p *{{ $TAffine }}) Double(a *{{ $TAffine }}) *{{ $TAffine }} {
+	var p1 {{ $TJacobian }}
+	p1.FromAffine(a)
+	p1.Double(&p1)
+	p.FromJacobian(&p1)
+	return p
+}
+
 // Sub subs two point in affine coordinates.
 // This should rarely be used as it is very inefficient compared to Jacobian
 func (p *{{ $TAffine }}) Sub(a, b *{{ $TAffine }}) *{{ $TAffine }} {
@@ -1224,6 +1234,10 @@ func (p *{{ $TJacobianExtended }}) setInfinity() *{{ $TJacobianExtended }} {
 	return p
 }
 
+func (p *{{ $TJacobianExtended }}) IsZero() bool {
+	return p.ZZ.IsZero()
+}
+
 // fromJacExtended sets Q in affine coordinates
 func (p *{{ $TAffine }})  fromJacExtended (Q *{{ $TJacobianExtended }}) *{{ $TAffine }} {
 	if Q.ZZ.IsZero() {
@@ -1661,7 +1675,7 @@ func BatchScalarMultiplication{{ toUpper .PointName }}(base *{{ $TAffine }}, sca
 					continue
 				}
 
-				// if msbWindow bit is set, we need to substract
+				// if msbWindow bit is set, we need to subtract
 				if digit & 1 == 0 {
 					// add
 					{{- if eq .PointName "g1"}}

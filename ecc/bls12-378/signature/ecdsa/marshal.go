@@ -1,4 +1,4 @@
-// Copyright 2020 ConsenSys Software Inc.
+// Copyright 2020 Consensys Software Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package ecdsa
 
 import (
 	"crypto/subtle"
+	"errors"
 	"io"
 	"math/big"
 
@@ -61,6 +62,12 @@ func (pk *PublicKey) SetBytes(buf []byte) (int, error) {
 // methods sets the current public key to the recovered value. Otherwise returns
 // error and leaves current public key unchanged.
 func (pk *PublicKey) RecoverFrom(msg []byte, v uint, r, s *big.Int) error {
+	if s.Cmp(fr.Modulus()) >= 0 {
+		return errors.New("s is larger than modulus")
+	}
+	if s.Cmp(big.NewInt(0)) <= 0 {
+		return errors.New("s is negative")
+	}
 	P, err := RecoverP(v, r)
 	if err != nil {
 		return err

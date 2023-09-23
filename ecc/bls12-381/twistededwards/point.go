@@ -1,4 +1,4 @@
-// Copyright 2020 ConsenSys Software Inc.
+// Copyright 2020 Consensys Software Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -161,8 +161,7 @@ func NewPointAffine(x, y fr.Element) PointAffine {
 
 // IsOnCurve checks if a point is on the twisted Edwards curve
 func (p *PointAffine) IsOnCurve() bool {
-
-	ecurve := GetEdwardsCurve()
+	initOnce.Do(initCurveParams)
 
 	var lhs, rhs, tmp fr.Element
 
@@ -174,7 +173,7 @@ func (p *PointAffine) IsOnCurve() bool {
 	tmp.Mul(&p.X, &p.X).
 		Mul(&tmp, &p.Y).
 		Mul(&tmp, &p.Y).
-		Mul(&tmp, &ecurve.D)
+		Mul(&tmp, &curveParams.D)
 	rhs.SetOne().Add(&rhs, &tmp)
 
 	return lhs.Equal(&rhs)
@@ -182,16 +181,15 @@ func (p *PointAffine) IsOnCurve() bool {
 
 // Neg sets p to -p1 and returns it
 func (p *PointAffine) Neg(p1 *PointAffine) *PointAffine {
-	p.Set(p1)
-	p.X.Neg(&p.X)
+	p.X.Neg(&p1.X)
+	p.Y = p1.Y
 	return p
 }
 
 // Add adds two points (x,y), (u,v) on a twisted Edwards curve with parameters a, d
 // modifies p
 func (p *PointAffine) Add(p1, p2 *PointAffine) *PointAffine {
-
-	ecurve := GetEdwardsCurve()
+	initOnce.Do(initCurveParams)
 
 	var xu, yv, xv, yu, dxyuv, one, denx, deny fr.Element
 	pRes := new(PointAffine)
@@ -204,7 +202,7 @@ func (p *PointAffine) Add(p1, p2 *PointAffine) *PointAffine {
 	yv.Mul(&p1.Y, &p2.Y)
 	pRes.Y.Sub(&yv, &xu)
 
-	dxyuv.Mul(&xv, &yu).Mul(&dxyuv, &ecurve.D)
+	dxyuv.Mul(&xv, &yu).Mul(&dxyuv, &curveParams.D)
 	one.SetOne()
 	denx.Add(&one, &dxyuv)
 	deny.Sub(&one, &dxyuv)
@@ -313,8 +311,9 @@ func (p *PointProj) IsZero() bool {
 // Neg negates point (x,y) on a twisted Edwards curve with parameters a, d
 // modifies p
 func (p *PointProj) Neg(p1 *PointProj) *PointProj {
-	p.Set(p1)
-	p.X.Neg(&p.X)
+	p.X.Neg(&p1.X)
+	p.Y = p1.Y
+	p.Z = p1.Z
 	return p
 }
 
@@ -329,14 +328,13 @@ func (p *PointProj) FromAffine(p1 *PointAffine) *PointProj {
 // MixedAdd adds a point in projective to a point in affine coordinates
 // cf https://hyperelliptic.org/EFD/g1p/auto-twisted-projective.html#addition-madd-2008-bbjlp
 func (p *PointProj) MixedAdd(p1 *PointProj, p2 *PointAffine) *PointProj {
-
-	ecurve := GetEdwardsCurve()
+	initOnce.Do(initCurveParams)
 
 	var B, C, D, E, F, G, H, I fr.Element
 	B.Square(&p1.Z)
 	C.Mul(&p1.X, &p2.X)
 	D.Mul(&p1.Y, &p2.Y)
-	E.Mul(&ecurve.D, &C).Mul(&E, &D)
+	E.Mul(&curveParams.D, &C).Mul(&E, &D)
 	F.Sub(&B, &E)
 	G.Add(&B, &E)
 	H.Add(&p1.X, &p1.Y)
@@ -381,15 +379,14 @@ func (p *PointProj) Double(p1 *PointProj) *PointProj {
 // Add adds points in projective coordinates
 // cf https://hyperelliptic.org/EFD/g1p/auto-twisted-projective.html#addition-add-2008-bbjlp
 func (p *PointProj) Add(p1, p2 *PointProj) *PointProj {
-
-	ecurve := GetEdwardsCurve()
+	initOnce.Do(initCurveParams)
 
 	var A, B, C, D, E, F, G, H, I fr.Element
 	A.Mul(&p1.Z, &p2.Z)
 	B.Square(&A)
 	C.Mul(&p1.X, &p2.X)
 	D.Mul(&p1.Y, &p2.Y)
-	E.Mul(&ecurve.D, &C).Mul(&E, &D)
+	E.Mul(&curveParams.D, &C).Mul(&E, &D)
 	F.Sub(&B, &E)
 	G.Add(&B, &E)
 	H.Add(&p1.X, &p1.Y)
@@ -470,9 +467,10 @@ func (p *PointExtended) Equal(p1 *PointExtended) bool {
 // Neg negates point (x,y) on a twisted Edwards curve with parameters a, d
 // modifies p
 func (p *PointExtended) Neg(p1 *PointExtended) *PointExtended {
-	p.Set(p1)
-	p.X.Neg(&p.X)
-	p.T.Neg(&p.T)
+	p.X.Neg(&p1.X)
+	p.Y = p1.Y
+	p.Z = p1.Z
+	p.T.Neg(&p1.T)
 	return p
 }
 
@@ -486,28 +484,23 @@ func (p *PointExtended) FromAffine(p1 *PointAffine) *PointExtended {
 }
 
 // Add adds points in extended coordinates
-// See https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd-2
+// See https://hyperelliptic.org/EFD/g1p/auto-twisted-extended.html#addition-add-2008-hwcd
 func (p *PointExtended) Add(p1, p2 *PointExtended) *PointExtended {
-	if p1.Equal(p2) {
-		p.Double(p1)
-		return p
-	}
-
 	var A, B, C, D, E, F, G, H, tmp fr.Element
 	A.Mul(&p1.X, &p2.X)
 	B.Mul(&p1.Y, &p2.Y)
-	C.Mul(&p1.Z, &p2.T)
-	D.Mul(&p1.T, &p2.Z)
-	E.Add(&D, &C)
-	tmp.Sub(&p1.X, &p1.Y)
-	F.Add(&p2.X, &p2.Y).
-		Mul(&F, &tmp).
-		Add(&F, &B).
-		Sub(&F, &A)
-	G.Set(&A)
-	mulByA(&G)
-	G.Add(&G, &B)
-	H.Sub(&D, &C)
+	C.Mul(&p1.T, &p2.T).Mul(&C, &curveParams.D)
+	D.Mul(&p1.Z, &p2.Z)
+	tmp.Add(&p1.X, &p1.Y)
+	E.Add(&p2.X, &p2.Y).
+		Mul(&E, &tmp).
+		Sub(&E, &A).
+		Sub(&E, &B)
+	F.Sub(&D, &C)
+	G.Add(&D, &C)
+	H.Set(&A)
+	mulByA(&H)
+	H.Sub(&B, &H)
 
 	p.X.Mul(&E, &F)
 	p.Y.Mul(&G, &H)

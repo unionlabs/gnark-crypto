@@ -29,13 +29,14 @@ import (
 	"github.com/consensys/gnark-crypto/internal/generator/signature/bls"
 	"github.com/consensys/gnark-crypto/internal/generator/signature/ecdsa"
 	"github.com/consensys/gnark-crypto/internal/generator/signature/schnorr"
+	"github.com/consensys/gnark-crypto/internal/generator/sis"
 	"github.com/consensys/gnark-crypto/internal/generator/sumcheck"
 	"github.com/consensys/gnark-crypto/internal/generator/test_vector_utils"
 	"github.com/consensys/gnark-crypto/internal/generator/tower"
 )
 
 const (
-	copyrightHolder = "ConsenSys Software Inc."
+	copyrightHolder = "Consensys Software Inc."
 	copyrightYear   = 2020
 	baseDir         = "../../"
 )
@@ -106,6 +107,10 @@ func main() {
 
 			// generate fft on fr
 			assertNoError(fft.Generate(conf, filepath.Join(curveDir, "fr", "fft"), bgen))
+
+			if conf.Equal(config.BN254) {
+				assertNoError(sis.Generate(conf, filepath.Join(curveDir, "fr", "sis"), bgen))
+			}
 
 			// generate kzg on fr
 			assertNoError(kzg.Generate(conf, filepath.Join(curveDir, "fr", "kzg"), bgen))

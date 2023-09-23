@@ -1,4 +1,4 @@
-// Copyright 2020 ConsenSys Software Inc.
+// Copyright 2020 Consensys Software Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ import (
 
 const (
 	sizeFr         = fr.Bytes
+	sizeFrBits     = fr.Bits
 	sizeFp         = fp.Bytes
 	sizePublicKey  = sizeFp
 	sizePrivateKey = sizeFr + sizePublicKey
@@ -91,6 +92,63 @@ func GenerateKey(rand io.Reader) (*PrivateKey, error) {
 	k.FillBytes(privateKey.scalar[:sizeFr])
 	privateKey.PublicKey.A.ScalarMultiplication(&g, k)
 	return privateKey, nil
+}
+
+// HashToInt converts a hash value to an integer. Per FIPS 186-4, Section 6.4,
+// we use the left-most bits of the hash to match the bit-length of the order of
+// the curve. This also performs Step 5 of SEC 1, Version 2.0, Section 4.1.3.
+func HashToInt(hash []byte) *big.Int {
+	if len(hash) > sizeFr {
+		hash = hash[:sizeFr]
+	}
+	ret := new(big.Int).SetBytes(hash)
+	excess := ret.BitLen() - sizeFrBits
+	if excess > 0 {
+		ret.Rsh(ret, uint(excess))
+	}
+	return ret
+}
+
+// RecoverP recovers the value P (prover commitment) when creating a signature.
+// It uses the recovery information v and part of the decomposed signature r. It
+// is used internally for recovering the public key.
+func RecoverP(v uint, r *big.Int) (*bn254.G1Affine, error) {
+	if r.Cmp(fr.Modulus()) >= 0 {
+		return nil, errors.New("r is larger than modulus")
+	}
+	if r.Cmp(big.NewInt(0)) <= 0 {
+		return nil, errors.New("r is negative")
+	}
+	x := new(big.Int).Set(r)
+	// if x is r or r+N
+	xChoice := (v & 2) >> 1
+	// if y is y or -y
+	yChoice := v & 1
+	// decompose limbs into big.Int value
+	// conditional +n based on xChoice
+	kn := big.NewInt(int64(xChoice))
+	kn.Mul(kn, fr.Modulus())
+	x.Add(x, kn)
+	// y^2 = x^3+ax+b
+	a, b := bn254.CurveCoefficients()
+	y := new(big.Int).Exp(x, big.NewInt(3), fp.Modulus())
+	if !a.IsZero() {
+		y.Add(y, new(big.Int).Mul(a.BigInt(new(big.Int)), x))
+	}
+	y.Add(y, b.BigInt(new(big.Int)))
+	y.Mod(y, fp.Modulus())
+	// y = sqrt(y^2)
+	if y.ModSqrt(y, fp.Modulus()) == nil {
+		return nil, errors.New("no square root")
+	}
+	// check that y has same oddity as defined by v
+	if y.Bit(0) != yChoice {
+		y = y.Sub(fp.Modulus(), y)
+	}
+	return &bn254.G1Affine{
+		X: *new(fp.Element).SetBigInt(x),
+		Y: *new(fp.Element).SetBigInt(y),
+	}, nil
 }
 
 type zr struct{}
@@ -178,8 +236,6 @@ func (privKey *PrivateKey) Public() signature.PublicKey {
 //
 // SEC 1, Version 2.0, Section 4.1.3
 func (privKey *PrivateKey) SignForRecover(message []byte, hFunc hash.Hash) (v uint, r, s *big.Int, err error) {
-	halfp := new(big.Int).Sub(fp.Modulus(), big.NewInt(1))
-	halfp.Div(halfp, big.NewInt(2))
 	r, s = new(big.Int), new(big.Int)
 
 	scalar, kInv := new(big.Int), new(big.Int)
@@ -202,10 +258,8 @@ func (privKey *PrivateKey) SignForRecover(message []byte, hFunc hash.Hash) (v ui
 			P.X.BigInt(r)
 			// set how many times we overflow the scalar field
 			v |= (uint(new(big.Int).Div(r, order).Uint64())) << 1
-			// set if y is small or big
-			if P.Y.BigInt(new(big.Int)).Cmp(halfp) >= 0 {
-				v |= 1
-			}
+			// set if y is even or odd
+			v |= P.Y.BigInt(new(big.Int)).Bit(0)
 
 			r.Mod(r, order)
 			if r.Sign() != 0 {

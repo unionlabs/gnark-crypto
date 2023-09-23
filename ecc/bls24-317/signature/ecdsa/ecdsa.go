@@ -1,4 +1,4 @@
-// Copyright 2020 ConsenSys Software Inc.
+// Copyright 2020 Consensys Software Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ import (
 
 const (
 	sizeFr         = fr.Bytes
+	sizeFrBits     = fr.Bits
 	sizeFp         = fp.Bytes
 	sizePublicKey  = sizeFp
 	sizePrivateKey = sizeFr + sizePublicKey
@@ -91,6 +92,21 @@ func GenerateKey(rand io.Reader) (*PrivateKey, error) {
 	k.FillBytes(privateKey.scalar[:sizeFr])
 	privateKey.PublicKey.A.ScalarMultiplication(&g, k)
 	return privateKey, nil
+}
+
+// HashToInt converts a hash value to an integer. Per FIPS 186-4, Section 6.4,
+// we use the left-most bits of the hash to match the bit-length of the order of
+// the curve. This also performs Step 5 of SEC 1, Version 2.0, Section 4.1.3.
+func HashToInt(hash []byte) *big.Int {
+	if len(hash) > sizeFr {
+		hash = hash[:sizeFr]
+	}
+	ret := new(big.Int).SetBytes(hash)
+	excess := ret.BitLen() - sizeFrBits
+	if excess > 0 {
+		ret.Rsh(ret, uint(excess))
+	}
+	return ret
 }
 
 type zr struct{}
